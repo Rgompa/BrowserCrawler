@@ -81,7 +81,7 @@ async def _run_discovery(project_id: str) -> None:
         project.message = "Starting an isolated Playwright MCP browser"
         store.save_project(project)
 
-        async with CopilotAnalyzer(os.getenv("COPILOT_MODEL", "gpt-5")) as analyzer:
+        async with CopilotAnalyzer(os.getenv("COPILOT_MODEL")) as analyzer:
             async with PlaywrightMCPBrowser(project.base_url) as browser:
                 await browser.call("browser_navigate", {"url": project.base_url})
                 for index in range(options.max_actions):

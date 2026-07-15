@@ -76,7 +76,7 @@ class PlaywrightMCPBrowser:
 
 
 class CopilotAnalyzer:
-    def __init__(self, model: str = "gpt-5") -> None:
+    def __init__(self, model: str | None = None) -> None:
         self.model = model
         self.client = None
         self.session = None
@@ -93,10 +93,11 @@ class CopilotAnalyzer:
         def reject_tools(_request: Any, _invocation: Any) -> Any:
             return PermissionRequestResult(kind="reject")
 
-        self.client = CopilotClient(working_directory=".")
+        self.client = CopilotClient()
         await self.client.start()
         self.session = await self.client.create_session(
             model=self.model,
+            working_directory=os.path.abspath("."),
             on_permission_request=reject_tools,
             system_message={
                 "mode": "append",
