@@ -15,6 +15,7 @@ class IntegrationError(RuntimeError):
 
 
 def extract_json(text: str) -> Any:
+    text = text.strip()
     fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
     candidate = fenced.group(1) if fenced else text
     first_object, first_array = candidate.find("{"), candidate.find("[")
@@ -23,7 +24,12 @@ def extract_json(text: str) -> Any:
         raise IntegrationError("Copilot did not return JSON")
     start = min(starts)
     end = max(candidate.rfind("}"), candidate.rfind("]"))
-    return json.loads(candidate[start:end + 1])
+    if end < start:
+        raise IntegrationError("Copilot did not return complete JSON")
+    try:
+        return json.loads(candidate[start:end + 1])
+    except json.JSONDecodeError as exc:
+        raise IntegrationError(f"Copilot returned invalid JSON: {exc.msg}") from exc
 
 
 class PlaywrightMCPBrowser:
@@ -132,9 +138,22 @@ class CopilotAnalyzer:
             await asyncio.wait_for(done.wait(), timeout=180)
         finally:
             unsubscribe()
+        messages = [message.strip() for message in messages if message and message.strip()]
         if not messages:
             raise IntegrationError("Copilot returned no analysis")
         return messages[-1]
+
+    async def complete_json(self, prompt: str) -> Any:
+        raw = await self.complete(prompt)
+        try:
+            return extract_json(raw)
+        except IntegrationError:
+            repair = (
+                "Your previous response was not machine-readable JSON. "
+                "Return only the JSON object or JSON array requested below, with no explanation, markdown, or code fence.\n\n"
+                f"ORIGINAL REQUEST:\n{prompt}"
+            )
+            return extract_json(await self.complete(repair))
 
     async def next_action(self, *, snapshot: str, history: list[dict[str, Any]], tools: str, budget: int) -> BrowserAction:
         prompt = f"""Choose one safe action that maximizes business-flow discovery.
@@ -154,7 +173,7 @@ CURRENT ACCESSIBILITY SNAPSHOT:
 REMAINING ACTION BUDGET: {budget}
 
 Return: {{"stop":boolean,"tool":string|null,"arguments":object,"flow":string,"observation":string,"reason":string}}"""
-        return BrowserAction.model_validate(extract_json(await self.complete(prompt)))
+        return BrowserAction.model_validate(await self.complete_json(prompt))
 
     async def generate_cases(self, evidence: list[dict[str, Any]]) -> list[TestCase]:
         prompt = f"""Create a risk-based regression suite from observed evidence. Cover every observed business flow with positive, negative, boundary, empty-state, authorization, validation, and recovery cases when supported. Do not invent inaccessible features. Mark inferred cases 'Needs review'. Prefer stable role/name locators in automation metadata.
@@ -164,7 +183,7 @@ EVIDENCE:
 
 Return a JSON array. Each item must match:
 {{"id":"FLOW-001","title":"...","flow":"...","type":"Positive|Negative|Edge","priority":"P0|P1|P2","status":"Ready|Needs review","preconditions":["..."],"steps":[{{"action":"...","expected":"...","automation":{{"kind":"navigate|click|fill|select|press|assert_text|assert_url|assert_visible|wait","locator":null,"value":null,"role":null,"name":null}}}}],"evidence":["URL or observation"]}}"""
-        raw = extract_json(await self.complete(prompt))
+        raw = await self.complete_json(prompt)
         if isinstance(raw, dict):
             raw = raw.get("items", raw.get("test_cases", []))
         return [TestCase.model_validate(item) for item in raw]
